@@ -1,0 +1,85 @@
+import { BadRequestException, Injectable, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { User } from './entities/user.entity';
+import { QueryFailedError, Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
+import { CreateUserDto, LoginUserDto } from './dto';
+import { JwtPayload } from './interfaces/jwt-payload.interface';
+import { JwtService } from '@nestjs/jwt';
+
+
+@Injectable()
+export class AuthService {
+
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    private readonly jwtService: JwtService,
+  ) { }
+
+  async create(createUserDto: CreateUserDto) {
+    try {
+      const { password, ...userData } = createUserDto;
+
+      const user = this.userRepository.create({
+        ...userData,
+        password: bcrypt.hashSync(password, 10)
+      });
+
+      await this.userRepository.save(user)
+      delete user.password;
+      // Retornar el JWT acceso
+      return {
+        ...user,
+        token: this.getJwtToken({ id: user.id, email: user.email })
+      };
+
+
+    } catch (error) {
+
+      console.log(error)
+      this.handleDBEErrors(error)
+    }
+
+  }
+
+  async login(loginUserDto: LoginUserDto) {
+
+    const { password, email } = loginUserDto;
+
+    const user = await this.userRepository.findOne({
+      where: { email },
+      select: { email: true, password: true, id:true }
+    });
+
+    if (!user)
+      throw new UnauthorizedException('Email is not valid');
+
+    if (!bcrypt.compareSync(password, user.password))
+      throw new UnauthorizedException('Password is not valid')
+
+    //To do: Retornar el JWT acceso 
+    return {
+      ...user,
+      token: this.getJwtToken({ id: user.id, email: user.email})
+    };
+  }
+
+  private getJwtToken(payload: JwtPayload) {
+    const token = this.jwtService.sign(payload);
+    return token;
+
+  }
+
+  private handleDBEErrors(error: any): never {
+    if (error.code === '23505')
+      throw new BadRequestException(error.detail);
+    console.log(error)
+
+    if (error.code === '1364')
+      throw new BadRequestException(error.detail);
+    console.log(error)
+
+    throw new InternalServerErrorException('Please check server logs');
+  }
+}
